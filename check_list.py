@@ -10,7 +10,7 @@ from datetime import datetime, date
 # Tentativa de import do ReportLab (para o PDF)
 REPORTLAB_OK = True
 try:
-    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.pagesizes import A4, portrait  # <- retrato
     from reportlab.lib import colors
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -64,8 +64,8 @@ SECTIONS = [
     },
 ]
 
-# Inicializa estado (usar [] para evitar colisão com .items())
-if "items" not in st.session_state:
+# Inicializa estado
+def build_items():
     items = []
     for s_idx, sec in enumerate(SECTIONS):
         for t_idx, t in enumerate(sec["tasks"]):
@@ -83,7 +83,10 @@ if "items" not in st.session_state:
                     "key_date": f"date_{s_idx}_{t_idx}",
                 }
             )
-    st.session_state["items"] = items
+    return items
+
+if "items" not in st.session_state:
+    st.session_state["items"] = build_items()
 
 # Cabeçalho
 hdr = st.columns([0.35, 0.1, 0.18, 0.17, 0.20], gap="small")
@@ -176,11 +179,12 @@ with st.expander("Prévia em tabela", expanded=False):
         hide_index=True
     )
 
-# --------- PDF ---------
+# --------- PDF (A4 retrato) ---------
 def gerar_pdf(df_: pd.DataFrame) -> bytes:
     buffer = BytesIO()
     doc = SimpleDocTemplate(
-        buffer, pagesize=A4,
+        buffer,
+        pagesize=portrait(A4),  # <- garante A4 retrato
         leftMargin=1.8*cm, rightMargin=1.8*cm, topMargin=1.8*cm, bottomMargin=1.8*cm,
         title="Check List Parametrização"
     )
@@ -210,7 +214,7 @@ def gerar_pdf(df_: pd.DataFrame) -> bytes:
             r["Observação"] if r["Observação"] else "-",
         ])
 
-    table = Table(data, colWidths=[3.2*cm, 6.8*cm, 2.4*cm, 3.0*cm, 2.2*cm, 3.0*cm])
+    table = Table(data, colWidths=[3.0*cm, 7.0*cm, 2.3*cm, 3.0*cm, 2.0*cm, 3.0*cm])
     table.setStyle(TableStyle([
         ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
         ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
@@ -233,25 +237,23 @@ def gerar_pdf(df_: pd.DataFrame) -> bytes:
     return pdf_bytes
 
 # Botões
-c1, c2, c3 = st.columns([0.22, 0.22, 0.56])
+c1, c2, _ = st.columns([0.22, 0.22, 0.56])
 with c1:
     gerar = st.button("Relatório", type="primary")
 with c2:
     limpar = st.button("Limpar observações/flags")
 
 if limpar:
-    # reset de todos os campos
+    # 1) Remover estados de widgets (evita StreamlitAPIException)
     for itm in st.session_state["items"]:
-        st.session_state[itm["key_done"]] = False
-        st.session_state[itm["key_obs"]] = ""
-        st.session_state[itm["key_resp"]] = ""
-        if itm["key_date"] in st.session_state:
-            del st.session_state[itm["key_date"]]
-        itm["done"] = False
-        itm["obs"] = ""
-        itm["responsavel"] = ""
-        itm["date"] = None
-    st.success("Checklist limpo.")
+        for k in (itm["key_done"], itm["key_obs"], itm["key_resp"], itm["key_date"]):
+            st.session_state.pop(k, None)
+
+    # 2) Resetar dados internos
+    st.session_state["items"] = build_items()
+
+    # 3) Recarregar a página para refletir estado limpo
+    st.rerun()
 
 if gerar:
     if not REPORTLAB_OK:
