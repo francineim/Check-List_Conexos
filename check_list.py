@@ -1,11 +1,11 @@
-# app.py
+# check_list.py
 # ------------------------------------------------------------
 # Check List Parametrização (Streamlit + PDF via ReportLab)
 # ------------------------------------------------------------
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, date
 
 # Tentativa de import do ReportLab (para o PDF)
 REPORTLAB_OK = True
@@ -18,83 +18,174 @@ try:
 except Exception:
     REPORTLAB_OK = False
 
-# ----------------------------
-# Config inicial da página
-# ----------------------------
 st.set_page_config(page_title="Check List Parametrização", layout="wide")
 st.title("Check List Parametrização")
-st.caption("Marque o que foi parametrizado e registre observações. Gere um PDF pelo botão **Relatório**.")
 
-# ----------------------------
-# Lista de tarefas (fixa)
-# ----------------------------
-DEFAULT_TASKS = [
-    "Criar CFOP",
-    "Vincular CFOP ao Tipo de Operação",
-    "Criar Ordem de Faturamento",
-    "Vincular Ordem de Faturamento na Pessoa",
-    "Criar Classificador de Produtos",
-    "Vincular Encargo de Retenção na Pessoa",
+# Aviso/objetivo
+st.info(
+    "O objetivo desse checklist é auxiliar nas parametrizações dos sistemas, ajudando a garantir que o sistema "
+    "não tenha redundâncias, eliminar retrabalho e atendimentos desnecessários."
+)
+
+# --------- Estrutura das seções e tarefas ---------
+SECTIONS = [
+    {
+        "sec": "1. Validações antes da parametrização",
+        "tasks": [
+            "Consultas: já existe algo configurado para outro cliente?",
+            "Classificadores: já existe para a mesma NCM ou tipo de operação?",
+        ],
+    },
+    {
+        "sec": "2. Usar ferramentas corretas e duplicidades",
+        "tasks": [
+            "Foi consultada a planilha ajustada pelo Izepe para prever conflitos",
+            "Foi feita conferência para evitar criar parâmetros com a mesma operação ou UF's?",
+        ],
+    },
+    {
+        "sec": "3. Parametrização de CFOP",
+        "tasks": [
+            "CFOP movimenta estoque?",
+            "Foram vinculadas as variáveis de observações de nota fiscais?",
+            "CFOP será usado em pedido de venda, foi vinculado o plano financeiro?",
+        ],
+    },
+    {
+        "sec": "4. Gerais",
+        "tasks": [
+            "Criar CFOP",
+            "Vincular CFOP ao Tipo de Operação",
+            "Criar Ordem de Faturamento",
+            "Vincular Ordem de Faturamento na Pessoa",
+            "Criar Classificador de Produtos",
+            "Vincular Encargo de Retenção na Pessoa",
+        ],
+    },
 ]
 
-# ----------------------------
-# Estado inicial
-# ----------------------------
-if "tasks" not in st.session_state:
-    st.session_state.tasks = [
-        {"tarefa": t, "done": False, "obs": ""} for t in DEFAULT_TASKS
-    ]
+# Inicializa estado
+if "items" not in st.session_state:
+    items = []
+    for s_idx, sec in enumerate(SECTIONS):
+        for t_idx, t in enumerate(sec["tasks"]):
+            items.append(
+                {
+                    "section": sec["sec"],
+                    "task": t,
+                    "done": False,
+                    "obs": "",
+                    "responsavel": "",
+                    "date": None,  # datetime.date
+                    "key_done": f"done_{s_idx}_{t_idx}",
+                    "key_obs": f"obs_{s_idx}_{t_idx}",
+                    "key_resp": f"resp_{s_idx}_{t_idx}",
+                    "key_date": f"date_{s_idx}_{t_idx}",
+                }
+            )
+    st.session_state.items = items
 
-# ----------------------------
-# Cabecalho das colunas
-# ----------------------------
-header_cols = st.columns([0.5, 0.2, 0.3], gap="small")
-with header_cols[0]:
+# Cabeçalho
+hdr = st.columns([0.35, 0.1, 0.18, 0.17, 0.20], gap="small")
+with hdr[0]:
     st.markdown("#### Tarefa")
-with header_cols[1]:
-    st.markdown("#### Parametrizado?")
-with header_cols[2]:
+with hdr[1]:
+    st.markdown("#### Feito?")
+with hdr[2]:
+    st.markdown("#### Responsável")
+with hdr[3]:
+    st.markdown("#### Data")
+with hdr[4]:
     st.markdown("#### Observação")
-
 st.markdown("---")
 
-# ----------------------------
-# Formulário por linha
-# ----------------------------
-for i, item in enumerate(st.session_state.tasks):
-    cols = st.columns([0.5, 0.2, 0.3], gap="small")
-    with cols[0]:
-        st.markdown(f"- {item['tarefa']}")
-    with cols[1]:
-        st.session_state.tasks[i]["done"] = st.checkbox(
-            " ", value=item["done"], key=f"done_{i}", help="Marque se já foi parametrizado."
-        )
-    with cols[2]:
-        st.session_state.tasks[i]["obs"] = st.text_area(
-            label=" ", value=item["obs"], key=f"obs_{i}", height=80, placeholder="Observações, pendências, quem fez, data etc."
-        )
+# Renderização agrupada por seção
+for sec in SECTIONS:
+    st.markdown(f"### {sec['sec']}")
+    for itm in [x for x in st.session_state.items if x["section"] == sec["sec"]]:
+        cols = st.columns([0.35, 0.1, 0.18, 0.17, 0.20], gap="small")
 
-st.markdown("---")
+        # Tarefa (verde quando concluída)
+        with cols[0]:
+            if st.session_state.get(itm["key_done"], itm["done"]):
+                st.markdown(f"<span style='color:#1a7f37'>✅ {itm['task']}</span>", unsafe_allow_html=True)
+            else:
+                st.markdown(f"- {itm['task']}")
 
-# ----------------------------
-# Função para gerar PDF
-# ----------------------------
-def gerar_pdf(tasks_data: pd.DataFrame) -> bytes:
-    """
-    Gera um PDF (bytes) com título, data/hora e tabela das tarefas.
-    Requer ReportLab.
-    """
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=1.8*cm,
-        rightMargin=1.8*cm,
-        topMargin=1.8*cm,
-        bottomMargin=1.8*cm,
-        title="Check List Parametrização"
+        # Checkbox "feito"
+        with cols[1]:
+            new_done = st.checkbox(
+                " ", value=st.session_state.get(itm["key_done"], itm["done"]),
+                key=itm["key_done"], help="Marque se já foi parametrizado."
+            )
+            itm["done"] = new_done
+
+        # Responsável
+        with cols[2]:
+            new_resp = st.text_input(
+                label=" ", value=st.session_state.get(itm["key_resp"], itm["responsavel"]),
+                key=itm["key_resp"], placeholder="Nome ou equipe"
+            )
+            itm["responsavel"] = new_resp
+
+        # Data (usa o estado se já houver; caso contrário, valor padrão será hoje)
+        with cols[3]:
+            # Se houver valor salvo, usa-o como value; senão deixa o controle decidir
+            if itm.get("date"):
+                new_date = st.date_input(" ", value=itm["date"], key=itm["key_date"])
+            else:
+                new_date = st.date_input(" ", key=itm["key_date"])
+            # Garantir conversão para date
+            if isinstance(new_date, date):
+                itm["date"] = new_date
+
+        # Observação
+        with cols[4]:
+            new_obs = st.text_area(
+                label=" ", value=st.session_state.get(itm["key_obs"], itm["obs"]),
+                key=itm["key_obs"], height=70, placeholder="Observações, pendências..."
+            )
+            itm["obs"] = new_obs
+
+    st.markdown("---")
+
+# Monta DataFrame para prévia/relatório
+def fmt_date(d):
+    return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
+
+df = pd.DataFrame(
+    [
+        {
+            "Seção": itm["section"],
+            "Tarefa": itm["task"],
+            "Status": "Parametrizado" if itm["done"] else "Pendente",
+            "Responsável": itm["responsavel"],
+            "Data": fmt_date(itm["date"]),
+            "Observação": itm["obs"],
+        }
+        for itm in st.session_state.items
+    ]
+)
+
+with st.expander("Prévia em tabela", expanded=False):
+    def styler(row):
+        color = "background-color: #e9f7ef" if row["Status"] == "Parametrizado" else ""
+        return [color] * len(row)
+
+    st.dataframe(
+        df.style.apply(styler, axis=1),
+        use_container_width=True,
+        hide_index=True
     )
 
+# --------- PDF ---------
+def gerar_pdf(df_: pd.DataFrame) -> bytes:
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        leftMargin=1.8*cm, rightMargin=1.8*cm, topMargin=1.8*cm, bottomMargin=1.8*cm,
+        title="Check List Parametrização"
+    )
     styles = getSampleStyleSheet()
     titulo = styles["Title"]
     normal = styles["BodyText"]
@@ -103,31 +194,38 @@ def gerar_pdf(tasks_data: pd.DataFrame) -> bytes:
     story.append(Paragraph("Check List Parametrização", titulo))
     story.append(Spacer(1, 6))
     story.append(Paragraph(datetime.now().strftime("Gerado em %d/%m/%Y %H:%M:%S"), normal))
-    story.append(Spacer(1, 12))
+    story.append(Spacer(1, 10))
+    story.append(Paragraph(
+        "O objetivo desse checklist é auxiliar nas parametrizações dos sistemas, ajudando a garantir que o sistema "
+        "não tenha redundâncias, eliminar retrabalho e atendimentos desnecessários.", normal
+    ))
+    story.append(Spacer(1, 14))
 
-    # Monta tabela
-    data = [["Tarefa", "Status", "Observação"]]
-    for _, row in tasks_data.iterrows():
+    data = [["Seção", "Tarefa", "Status", "Responsável", "Data", "Observação"]]
+    for _, r in df_.iterrows():
         data.append([
-            row["Tarefa"],
-            row["Status"],
-            row["Observação"] if row["Observação"] else "-"
+            r["Seção"],
+            r["Tarefa"],
+            r["Status"],
+            r["Responsável"] if r["Responsável"] else "-",
+            r["Data"] if r["Data"] else "-",
+            r["Observação"] if r["Observação"] else "-",
         ])
 
-    table = Table(data, colWidths=[7.5*cm, 3.0*cm, 6.0*cm])
+    table = Table(data, colWidths=[3.2*cm, 6.8*cm, 2.4*cm, 3.0*cm, 2.2*cm, 3.0*cm])
     table.setStyle(TableStyle([
         ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
         ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-        ("TEXTCOLOR", (0,0), (-1,0), colors.black),
-        ("ALIGN", (1,1), (1,-1), "CENTER"),
-        ("VALIGN", (0,0), (-1,-1), "TOP"),
         ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("FONTSIZE", (0,0), (-1,-1), 9),
+        ("VALIGN", (0,0), (-1,-1), "TOP"),
+        ("FONTSIZE", (0,0), (-1,-1), 8.6),
+        ("ALIGN", (2,1), (2,-1), "CENTER"),
+        ("ALIGN", (4,1), (4,-1), "CENTER"),
         ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
-        ("LEFTPADDING", (0,0), (-1,-1), 6),
-        ("RIGHTPADDING", (0,0), (-1,-1), 6),
-        ("TOPPADDING", (0,0), (-1,-1), 4),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+        ("LEFTPADDING", (0,0), (-1,-1), 5),
+        ("RIGHTPADDING", (0,0), (-1,-1), 5),
+        ("TOPPADDING", (0,0), (-1,-1), 3),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
     ]))
 
     story.append(table)
@@ -136,43 +234,31 @@ def gerar_pdf(tasks_data: pd.DataFrame) -> bytes:
     buffer.close()
     return pdf_bytes
 
-# ----------------------------
-# Monta DataFrame atual
-# ----------------------------
-df = pd.DataFrame([
-    {
-        "Tarefa": item["tarefa"],
-        "Status": "Parametrizado" if item["done"] else "Pendente",
-        "Observação": item["obs"]
-    }
-    for item in st.session_state.tasks
-])
-
-with st.expander("Visualizar como tabela (prévia)", expanded=False):
-    st.dataframe(df, use_container_width=True)
-
-# ----------------------------
-# Botões de ação
-# ----------------------------
-btn_cols = st.columns([0.25, 0.25, 0.5])
-with btn_cols[0]:
+# Botões
+c1, c2, c3 = st.columns([0.22, 0.22, 0.56])
+with c1:
     gerar = st.button("Relatório", type="primary")
-with btn_cols[1]:
+with c2:
     limpar = st.button("Limpar observações/flags")
 
 if limpar:
-    for i in range(len(st.session_state.tasks)):
-        st.session_state.tasks[i]["done"] = False
-        st.session_state.tasks[i]["obs"] = ""
-        st.session_state[f"done_{i}"] = False
-        st.session_state[f"obs_{i}"] = ""
+    # reset de todos os campos
+    for itm in st.session_state.items:
+        st.session_state[itm["key_done"]] = False
+        st.session_state[itm["key_obs"]] = ""
+        st.session_state[itm["key_resp"]] = ""
+        # Para date_input, remover do session_state para voltar ao padrão
+        if itm["key_date"] in st.session_state:
+            del st.session_state[itm["key_date"]]
+        itm["done"] = False
+        itm["obs"] = ""
+        itm["responsavel"] = ""
+        itm["date"] = None
     st.success("Checklist limpo.")
 
 if gerar:
     if not REPORTLAB_OK:
-        st.error(
-            "Biblioteca **reportlab** não encontrada. Instale com `pip install reportlab` e tente novamente."
-        )
+        st.error("Biblioteca **reportlab** não encontrada. Instale com `pip install reportlab` e tente novamente.")
     else:
         pdf_content = gerar_pdf(df)
         file_name = f"checklist_parametrizacao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
@@ -184,6 +270,5 @@ if gerar:
         )
         st.success("Relatório gerado com sucesso.")
 
-# Rodapé
 st.markdown("---")
-st.caption("Dica: use o botão **Limpar** antes de iniciar um novo ciclo de parametrização.")
+st.caption("Dica: conclua as tarefas e registre responsável e data; as concluídas ficam em verde para facilitar a revisão.")
