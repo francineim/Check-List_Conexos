@@ -10,10 +10,12 @@ from datetime import datetime, date
 # Tentativa de import do ReportLab (para o PDF)
 REPORTLAB_OK = True
 try:
-    from reportlab.lib.pagesizes import A4, portrait  # <- retrato
+    from reportlab.lib.pagesizes import A4, portrait  # retrato
     from reportlab.lib import colors
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, KeepTogether
+    )
     from reportlab.lib.units import cm
 except Exception:
     REPORTLAB_OK = False
@@ -64,7 +66,7 @@ SECTIONS = [
     },
 ]
 
-# Inicializa estado
+# ---- Helpers ----
 def build_items():
     items = []
     for s_idx, sec in enumerate(SECTIONS):
@@ -85,10 +87,29 @@ def build_items():
             )
     return items
 
+def fmt_date(d):
+    return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
+
+def df_current(items_list):
+    return pd.DataFrame(
+        [
+            {
+                "Seção": itm["section"],
+                "Tarefa": itm["task"],
+                "Status": "Parametrizado" if itm["done"] else "Pendente",
+                "Responsável": itm["responsavel"],
+                "Data": fmt_date(itm["date"]),
+                "Observação": itm["obs"],
+            }
+            for itm in items_list
+        ]
+    )
+
+# ---- Estado ----
 if "items" not in st.session_state:
     st.session_state["items"] = build_items()
 
-# Cabeçalho
+# ---- Cabeçalho UI ----
 hdr = st.columns([0.35, 0.1, 0.18, 0.17, 0.20], gap="small")
 with hdr[0]:
     st.markdown("#### Tarefa")
@@ -102,7 +123,7 @@ with hdr[4]:
     st.markdown("#### Observação")
 st.markdown("---")
 
-# Renderização agrupada por seção
+# ---- Renderização agrupada por seção ----
 for sec in SECTIONS:
     st.markdown(f"### {sec['sec']}")
     for itm in [x for x in st.session_state["items"] if x["section"] == sec["sec"]]:
@@ -150,29 +171,13 @@ for sec in SECTIONS:
 
     st.markdown("---")
 
-# Monta DataFrame para prévia/relatório
-def fmt_date(d):
-    return d.strftime("%d/%m/%Y") if isinstance(d, date) else ""
-
-df = pd.DataFrame(
-    [
-        {
-            "Seção": itm["section"],
-            "Tarefa": itm["task"],
-            "Status": "Parametrizado" if itm["done"] else "Pendente",
-            "Responsável": itm["responsavel"],
-            "Data": fmt_date(itm["date"]),
-            "Observação": itm["obs"],
-        }
-        for itm in st.session_state["items"]
-    ]
-)
+# ---- DataFrame para prévia/relatório ----
+df = df_current(st.session_state["items"])
 
 with st.expander("Prévia em tabela", expanded=False):
     def styler(row):
         color = "background-color: #e9f7ef" if row["Status"] == "Parametrizado" else ""
         return [color] * len(row)
-
     st.dataframe(
         df.style.apply(styler, axis=1),
         use_container_width=True,
@@ -181,62 +186,129 @@ with st.expander("Prévia em tabela", expanded=False):
 
 # --------- PDF (A4 retrato) ---------
 def gerar_pdf(df_: pd.DataFrame) -> bytes:
+    """Gera PDF agrupando por seção, com tabela por seção.
+       Colunas: Tarefa | Status | Responsável | Data | Observação
+    """
     buffer = BytesIO()
+
+    # Cabeçalho/rodapé com numeração de páginas
+    def _header_footer(canvas, doc):
+        canvas.saveState()
+        canvas.setFont("Helvetica", 9)
+        # Título no topo
+        canvas.drawString(1.8*cm, A4[1] - 1.2*cm, "Check List Parametrização")
+        # Página no rodapé
+        page_num = canvas.getPageNumber()
+        canvas.drawRightString(A4[0] - 1.8*cm, 1.2*cm, f"Página {page_num}")
+        canvas.restoreState()
+
     doc = SimpleDocTemplate(
         buffer,
-        pagesize=portrait(A4),  # <- garante A4 retrato
-        leftMargin=1.8*cm, rightMargin=1.8*cm, topMargin=1.8*cm, bottomMargin=1.8*cm,
+        pagesize=portrait(A4),
+        leftMargin=1.8*cm, rightMargin=1.8*cm, topMargin=2.2*cm, bottomMargin=1.8*cm,
         title="Check List Parametrização"
     )
+
     styles = getSampleStyleSheet()
-    titulo = styles["Title"]
-    normal = styles["BodyText"]
+    style_title = styles["Title"]
+    style_body = styles["BodyText"]
+    style_section = ParagraphStyle(
+        "SectionHeader",
+        parent=styles["Heading2"],
+        fontName="Helvetica-Bold",
+        fontSize=12,
+        spaceBefore=8,
+        spaceAfter=6,
+    )
+    style_th = ParagraphStyle(
+        "TableHeader",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=9,
+    )
+    style_td = ParagraphStyle(
+        "TableCell",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=9,
+        leading=12,
+    )
+    style_td_center = ParagraphStyle(
+        "TableCellCenter",
+        parent=style_td,
+        alignment=1,  # center
+    )
 
     story = []
-    story.append(Paragraph("Check List Parametrização", titulo))
-    story.append(Spacer(1, 6))
-    story.append(Paragraph(datetime.now().strftime("Gerado em %d/%m/%Y %H:%M:%S"), normal))
-    story.append(Spacer(1, 10))
+    # Cabeçalho inicial
+    story.append(Paragraph("Check List Parametrização", style_title))
+    story.append(Spacer(1, 4))
+    story.append(Paragraph(datetime.now().strftime("Gerado em %d/%m/%Y %H:%M:%S"), style_body))
+    story.append(Spacer(1, 8))
     story.append(Paragraph(
         "O objetivo desse checklist é auxiliar nas parametrizações dos sistemas, ajudando a garantir que o sistema "
-        "não tenha redundâncias, eliminar retrabalho e atendimentos desnecessários.", normal
+        "não tenha redundâncias, eliminar retrabalho e atendimentos desnecessários.", style_body
     ))
-    story.append(Spacer(1, 14))
+    story.append(Spacer(1, 10))
 
-    data = [["Seção", "Tarefa", "Status", "Responsável", "Data", "Observação"]]
-    for _, r in df_.iterrows():
-        data.append([
-            r["Seção"],
-            r["Tarefa"],
-            r["Status"],
-            r["Responsável"] if r["Responsável"] else "-",
-            r["Data"] if r["Data"] else "-",
-            r["Observação"] if r["Observação"] else "-",
-        ])
+    # Agrupa por seção
+    for section_name, df_sec in df_.groupby("Seção", sort=False):
+        story.append(Paragraph(section_name, style_section))
+        story.append(Spacer(1, 2))
 
-    table = Table(data, colWidths=[3.0*cm, 7.0*cm, 2.3*cm, 3.0*cm, 2.0*cm, 3.0*cm])
-    table.setStyle(TableStyle([
-        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-        ("VALIGN", (0,0), (-1,-1), "TOP"),
-        ("FONTSIZE", (0,0), (-1,-1), 8.6),
-        ("ALIGN", (2,1), (2,-1), "CENTER"),
-        ("ALIGN", (4,1), (4,-1), "CENTER"),
-        ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.whitesmoke, colors.white]),
-        ("LEFTPADDING", (0,0), (-1,-1), 5),
-        ("RIGHTPADDING", (0,0), (-1,-1), 5),
-        ("TOPPADDING", (0,0), (-1,-1), 3),
-        ("BOTTOMPADDING", (0,0), (-1,-1), 3),
-    ]))
+        # Cabeçalho da tabela por seção
+        data = [
+            [
+                Paragraph("Tarefa", style_th),
+                Paragraph("Status", style_th),
+                Paragraph("Responsável", style_th),
+                Paragraph("Data", style_th),
+                Paragraph("Observação", style_th),
+            ]
+        ]
 
-    story.append(table)
-    doc.build(story)
+        # Linhas
+        for _, r in df_sec.iterrows():
+            status = r["Status"]
+            # Status em verde quando parametrizado
+            if status == "Parametrizado":
+                status_para = Paragraph('<font color="#1a7f37">Parametrizado</font>', style_td_center)
+            else:
+                status_para = Paragraph("Pendente", style_td_center)
+
+            data.append([
+                Paragraph(r["Tarefa"], style_td),
+                status_para,
+                Paragraph(r["Responsável"] if r["Responsável"] else "-", style_td),
+                Paragraph(r["Data"] if r["Data"] else "-", style_td_center),
+                Paragraph(r["Observação"] if r["Observação"] else "-", style_td),
+            ])
+
+        # Larguras: somatório = 17.4cm (A4 21cm - 1.8*2 cm de margens)
+        col_widths = [7.0*cm, 2.4*cm, 3.0*cm, 2.0*cm, 3.0*cm]
+        table = Table(data, colWidths=col_widths, hAlign="LEFT")
+        table.setStyle(TableStyle([
+            ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+            ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+            ("VALIGN", (0,0), (-1,-1), "TOP"),
+            ("TOPPADDING", (0,0), (-1,-1), 4),
+            ("BOTTOMPADDING", (0,0), (-1,-1), 4),
+            ("LEFTPADDING", (0,0), (-1,-1), 5),
+            ("RIGHTPADDING", (0,0), (-1,-1), 5),
+        ]))
+
+        # KeepTogether para evitar cabeçalho da seção “órfão”
+        story.append(KeepTogether([table]))
+        story.append(Spacer(1, 8))
+
+    # Build com header/footer
+    doc.build(story, onFirstPage=_header_footer, onLaterPages=_header_footer)
+
     pdf_bytes = buffer.getvalue()
     buffer.close()
     return pdf_bytes
 
-# Botões
+# ---- Botões ----
 c1, c2, _ = st.columns([0.22, 0.22, 0.56])
 with c1:
     gerar = st.button("Relatório", type="primary")
@@ -248,10 +320,8 @@ if limpar:
     for itm in st.session_state["items"]:
         for k in (itm["key_done"], itm["key_obs"], itm["key_resp"], itm["key_date"]):
             st.session_state.pop(k, None)
-
     # 2) Resetar dados internos
     st.session_state["items"] = build_items()
-
     # 3) Recarregar a página para refletir estado limpo
     st.rerun()
 
