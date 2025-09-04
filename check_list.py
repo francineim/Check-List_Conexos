@@ -64,7 +64,7 @@ SECTIONS = [
     },
 ]
 
-# Inicializa estado
+# Inicializa estado (usar [] para evitar colisão com .items())
 if "items" not in st.session_state:
     items = []
     for s_idx, sec in enumerate(SECTIONS):
@@ -83,7 +83,7 @@ if "items" not in st.session_state:
                     "key_date": f"date_{s_idx}_{t_idx}",
                 }
             )
-    st.session_state.items = items
+    st.session_state["items"] = items
 
 # Cabeçalho
 hdr = st.columns([0.35, 0.1, 0.18, 0.17, 0.20], gap="small")
@@ -102,7 +102,7 @@ st.markdown("---")
 # Renderização agrupada por seção
 for sec in SECTIONS:
     st.markdown(f"### {sec['sec']}")
-    for itm in [x for x in st.session_state.items if x["section"] == sec["sec"]]:
+    for itm in [x for x in st.session_state["items"] if x["section"] == sec["sec"]]:
         cols = st.columns([0.35, 0.1, 0.18, 0.17, 0.20], gap="small")
 
         # Tarefa (verde quando concluída)
@@ -128,14 +128,12 @@ for sec in SECTIONS:
             )
             itm["responsavel"] = new_resp
 
-        # Data (usa o estado se já houver; caso contrário, valor padrão será hoje)
+        # Data
         with cols[3]:
-            # Se houver valor salvo, usa-o como value; senão deixa o controle decidir
             if itm.get("date"):
                 new_date = st.date_input(" ", value=itm["date"], key=itm["key_date"])
             else:
                 new_date = st.date_input(" ", key=itm["key_date"])
-            # Garantir conversão para date
             if isinstance(new_date, date):
                 itm["date"] = new_date
 
@@ -163,7 +161,7 @@ df = pd.DataFrame(
             "Data": fmt_date(itm["date"]),
             "Observação": itm["obs"],
         }
-        for itm in st.session_state.items
+        for itm in st.session_state["items"]
     ]
 )
 
@@ -243,11 +241,10 @@ with c2:
 
 if limpar:
     # reset de todos os campos
-    for itm in st.session_state.items:
+    for itm in st.session_state["items"]:
         st.session_state[itm["key_done"]] = False
         st.session_state[itm["key_obs"]] = ""
         st.session_state[itm["key_resp"]] = ""
-        # Para date_input, remover do session_state para voltar ao padrão
         if itm["key_date"] in st.session_state:
             del st.session_state[itm["key_date"]]
         itm["done"] = False
